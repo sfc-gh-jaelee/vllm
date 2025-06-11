@@ -28,15 +28,12 @@ class MLPProposer:
         #     num_predict_tokens=3,
         # )
 
-        next_tokens, more_tokens = self.model.generate_proposals(
+        more_tokens = self.model.generate_proposals(
             input_ids=input_ids,
             previous_hidden_states=previous_hidden_states,
             num_predict_tokens=3,
         )
 
-        more_tokens_cpu = []
-        for mt in more_tokens:
-            more_tokens_cpu.append(mt.cpu().numpy())
 
         from typing import List
 
@@ -45,21 +42,9 @@ class MLPProposer:
 
         for b in range(batch_size):
             seq_candidates : List[List[int]] = []
-            seq_candidates.append([more_tokens_cpu[0][b, 0], more_tokens_cpu[1][b, 0], more_tokens_cpu[2][b, 0]])
-            seq_candidates.append([more_tokens_cpu[0][b, 1]])
-            seq_candidates.append([more_tokens_cpu[0][b, 2]])
-            #seq_candidates.append([more_tokens_cpu[0][b, 3]])
-            seq_candidates.append([more_tokens_cpu[0][b, 0], more_tokens_cpu[1][b, 1]])
-            seq_candidates.append([more_tokens_cpu[0][b, 0], more_tokens_cpu[1][b, 2]])
-            #seq_candidates.append([more_tokens_cpu[0][b, 0], more_tokens_cpu[1][b, 3]])
-            seq_candidates.append([more_tokens_cpu[0][b, 0], more_tokens_cpu[1][b, 0], more_tokens_cpu[2][b, 1]])
-            seq_candidates.append([more_tokens_cpu[0][b, 0], more_tokens_cpu[1][b, 0], more_tokens_cpu[2][b, 2]])
-            #seq_candidates.append([more_tokens_cpu[0][b, 0], more_tokens_cpu[1][b, 0], more_tokens_cpu[2][b, 3]])
-
+            for mt in more_tokens[0][b]:
+                seq_candidates.append(mt.cpu().tolist())
             all_seq_candidates.append(seq_candidates)
 
-        #print('seq_candidates', seq_candidates)
-
-        #return next_tokens.cpu().numpy()
-        return next_tokens.cpu().numpy(), all_seq_candidates
+        return all_seq_candidates
         

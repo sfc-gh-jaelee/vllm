@@ -1,10 +1,12 @@
 import collections
 import math
+import os
 from typing import Iterable, List, Tuple
 
 import torch
 import torch.nn as nn
 
+import torch.nn.functional as F
 from vllm.config import VllmConfig
 from vllm.model_executor.layers.logits_processor import LogitsProcessorOpt
 from vllm.model_executor.layers.sampler import SamplerOutput, get_sampler
@@ -478,7 +480,7 @@ class MLPVariantSpeculator(nn.Module):
         self.tie_weights = config.tie_weights
         self.tie_lstm_embs = config.tie_lstm_embs
         self.scale_input = config.scale_input
-        self.quantize_lm_head = config.quantize_lm_head
+        self.quantize_lm_head = True
 
         quant_config = Fp8Config() if self.quantize_lm_head else None
         self.method = getattr(config, "method", "sum_rnn")
@@ -799,7 +801,71 @@ class MLPVariantSpeculator(nn.Module):
             else:
                 next_tokens_tensors[head_index].copy_(last_tokens)
 
-        return next_tokens_tensors
+    def generate_multiple_token_ids(
+            self,
+            batch_size: int,
+            num_predict_tokens: int,
+            last_tokens: torch.Tensor,
+            previous_hidden_states: torch.Tensor,
+            next_tokens_tensors: List[torch.Tensor],
+            all_token_tensors: List[torch.Tensor],
+            cell_states: torch.Tensor = None,
+            max_candidates = 20,
+            n_candidates = 8,
+    ) -> torch.Tensor:
+        out = None
+        topks = [int(s) for s in os.environ["topks"].split(",")]
+        for head_index in range(num_predict_tokens):
+            if self.method == "sum_lstm":
+                states, cell_states = self.generate_states(
+                    last_tokens, previous_hidden_states, head_index, cell_states
+                )
+            else:
+                states = self.generate_states(
+                    last_tokens, previous_hidden_states, head_index
+                )
+            previous_hidden_states = states
+            states = states.flatten(0, 1)
+            head_weight = (
+                self.qhead[head_index]
+                if self.qhead is not None and batch_size <= 32
+                else self.head[head_index]
+            )
+            logits = self.logits_processor(head_weight, states)
+
+            topk = topks[head_index]
+
+            if get_tensor_model_parallel_world_size() == 1:
+
+                logits, last_tokens = torch.topk(logits, topk, dim=-1)
+                if out is None:
+                    out = last_tokens.view(batch_size, -1, 1)
+                else:
+                    out = out.unsqueeze(2).expand(-1, -1, topk, -1)  # b k k' d
+                    out = out.reshape(batch_size, -1, head_index)
+                    out = torch.cat([out, last_tokens.view(batch_size, -1, 1)], dim=-1)
+
+                last_tokens = last_tokens.reshape(batch_size, -1)
+
+                previous_hidden_states = previous_hidden_states.unsqueeze(2).expand(-1, -1, topk, -1)  # b k k' d
+                previous_hidden_states = previous_hidden_states.reshape(batch_size, -1, previous_hidden_states.size(3))  # b kk' d
+                if self.method == 'sum_lstm':
+                    cell_states = cell_states.unsqueeze(2).expand(-1, -1, topk, -1)  # b k k' d
+                    cell_states = cell_states.reshape(batch_size, -1, cell_states.size(3))  # b kk' d
+
+            else:
+                raise NotImplementedError
+                # vals, indices = torch.topk(logits, topk, dim=-1)
+                # indices = indices + get_tensor_model_parallel_rank() * logits.shape[-1]
+                # vals = tensor_model_parallel_all_gather(vals)
+                # indices = tensor_model_parallel_all_gather(indices)
+                #
+                # more_indices = torch.topk(vals, topk, dim=-1, sorted=True).indices
+                # last_tokens = torch.gather(indices, -1, more_indices)
+                #
+                # all_token_tensors.append(last_tokens)
+
+        all_token_tensors.append(out)
 
     def generate_proposals(
         self,
@@ -825,15 +891,18 @@ class MLPVariantSpeculator(nn.Module):
         state_shapes[-1] = self.inner_dim[-1]
 
         static_next_tokens = [None] * num_predict_tokens
+        all_token_tensors : List[torch.Tensor] = []
+
+        if self.method == "sum_lstm":
+            previous_cell_states = torch.zeros(
+                state_shapes,
+                device=previous_hidden_states.device,
+                dtype=previous_hidden_states.dtype,
+            )
 
         if self.cuda_graph_mode and batch_size <= self.cuda_graph_max_batch_size:
             static_states = self.static_cuda_buffers["previous_hidden_states"]
             if self.method == "sum_lstm":
-                previous_cell_states = torch.zeros(
-                    state_shapes,
-                    device=previous_hidden_states.device,
-                    dtype=previous_hidden_states.dtype,
-                )
                 (
                     padded_size,
                     static_last_tokens,
@@ -897,30 +966,26 @@ class MLPVariantSpeculator(nn.Module):
                 g.replay()
         else:
             if self.method == "sum_lstm":
-                self.generate_token_ids(
+                self.generate_multiple_token_ids(
                     batch_size,
                     num_predict_tokens,
-                    static_last_tokens,
-                    static_hidden_states,
+                    last_tokens,
+                    previous_hidden_states,
                     static_next_tokens,
-                    cell_states=static_cell_states,
+                    all_token_tensors,
+                    cell_states=previous_cell_states,
                 )
             else:
-                self.generate_token_ids(
+                self.generate_multiple_token_ids(
                     batch_size,
                     num_predict_tokens,
-                    static_last_tokens,
-                    static_hidden_states,
+                    last_tokens,
+                    previous_hidden_states,
                     static_next_tokens,
+                    all_token_tensors,
                 )
 
-        next_tokens = []
-        for i in range(num_predict_tokens):
-            next_tokens.append(
-                SamplerOutput(sampled_token_ids=static_next_tokens[i][:batch_size])
-            )
-
-        return next_tokens
+        return all_token_tensors
 
     def maybe_load_weight(self, param, loaded_weight):
         if param is not None:

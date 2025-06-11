@@ -1212,7 +1212,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             # spec_token_ids_ngram = self.generate_draft_token_ids_ngram(
             #     valid_sampled_token_ids, sampling_metadata)
 
-            spec_token_ids_mlp, candidates = self.generate_draft_token_ids_mlp(
+            candidates = self.generate_draft_token_ids_mlp(
                 valid_sampled_token_ids, sampling_metadata,
                 previous_hidden_states)
             #print0("spec_token_ids_mlp: ", spec_token_ids_mlp)
@@ -1222,7 +1222,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
             from vllm.v1.spec_decode.tree_decoding import SequenceTree
 
-            for idx in range(len(spec_token_ids_mlp)):
+            for idx in range(len(candidates)):
                 st = SequenceTree()
                 last_token = valid_sampled_token_ids[idx][-1]
                 #st.add_sequence([last_token] + spec_token_ids_ngram[idx])
@@ -1325,14 +1325,12 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             self.input_batch.token_ids_cpu[i, start_idx:end_idx] = sampled_ids
             last_tokens.append(self.input_batch.token_ids_cpu[i, end_idx - 1])
 
-        drafter_output, candidates = self.mlp_drafter.propose(
+        candidates = self.mlp_drafter.propose(
             last_tokens,
             previous_hidden_states=previous_hidden_states,
         )
 
-        draft_token_ids = drafter_output.tolist()
-
-        return draft_token_ids, candidates
+        return candidates
 
     def load_model(self) -> None:
         logger.info("Starting to load model %s...", self.model_config.model)
