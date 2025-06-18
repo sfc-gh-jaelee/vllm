@@ -253,8 +253,11 @@ class FlashInferMetadataBuilder:
         #         print("mask", self.runner.seq_trees[k].mask())
 
         tree_mask_num = len(self.runner.seq_trees)
+        # print("tree_mask_num:", tree_mask_num)
+        # print("batch_size:", batch_size)
         for i in range(batch_size):
             if (i < tree_mask_num):
+                # print("self.runner.seq_trees[i].mask():", self.runner.seq_trees[i].mask().shape)
                 tree_mask = self.runner.seq_trees[i].mask().to(
                             self.runner.device)
                 all_trues = torch.full((qo_len[i], kv_len[i] - qo_len[i]), True,
@@ -271,8 +274,12 @@ class FlashInferMetadataBuilder:
                 # if get_tp_group().is_first_rank:
                 #     print("i", i, "mask")
                 #     print(mask_i[:, -qo_len[i]:])
+            # print(f"qo_len[i]: {qo_len[i]}, kv_len[i]: {kv_len[i]}")
+            # print("mask_i:", mask_i.shape)
             mask_arr.append(mask_i.flatten())
         custom_mask = torch.cat(mask_arr, dim=0)
+        # print("custom_mask: ", custom_mask.shape)
+        # print(custom_mask)
 
         if attn_metadata.use_cascade:
             attn_metadata.cascade_wrapper = self._get_cascade_wrapper()
@@ -469,6 +476,27 @@ class FlashInferImpl(AttentionImpl):
         """
         assert output is not None, "Output tensor must be provided."
 
+        # is_prefilling = True
+        # is_first_layer = True
+        # if attn_metadata is not None:
+            # print("FlashInferImpl.forward!")
+            # is_prefilling = attn_metadata.slot_mapping[0].item() == 0
+            # is_first_layer = "layers.0." in layer.layer_name
+            # print("is_prefilling: ", is_prefilling)
+            # print("is_first_layer:", is_first_layer)
+            # print("attn_metadata", attn_metadata)
+            # if not is_prefilling and is_first_layer:
+            #     # print("layer", layer)
+            #     # print(dir(layer))
+            #     # print("layer.layer_name", layer.layer_name)
+            #     # print("slot_mapping[0]:", attn_metadata.slot_mapping[0])
+            #     print("query", query.shape)
+            #     print("key", key.shape)
+            #     print("value", value.shape)
+            #     print("kv_cache", kv_cache.shape)
+
+        # print(f"FlashInferImpl.forward (prefill={is_prefilling}, first_layer={is_first_layer})")
+
         if attn_metadata is None:
             # Profiling run.
             return output
@@ -516,6 +544,9 @@ class FlashInferImpl(AttentionImpl):
                 v_scale=layer._v_scale_float,
                 out=output,
             )
+            # print("output", output.shape)
+            # if not is_prefilling:
+            #     assert False
             return output
 
         # Cascade attention (rare case).

@@ -376,6 +376,11 @@ class MLPSpeculator(nn.Module):
         static_next_tokens = [None] * num_predict_tokens
         all_token_tensors : List[torch.Tensor] = []
 
+        # print("MLPSpeculator.generate_proposals")
+        # print("input_ids:", input_ids.shape)
+        # print("self.cuda_graph_mode:", self.cuda_graph_mode)
+        # print("num_predict_tokens:", num_predict_tokens)
+
         if self.cuda_graph_mode and batch_size <= self.cuda_graph_max_batch_size:
             padded_size, static_last_tokens, static_hidden_states = (
                 self._prepare_cuda_graph_ios(
@@ -424,12 +429,15 @@ class MLPSpeculator(nn.Module):
                 static_next_tokens,
                 all_token_tensors,
             )
-
+        # print("static_next_tokens:", static_next_tokens)
+        # print("batch_size:", batch_size)
         next_tokens = []
         for i in range(num_predict_tokens):
             next_tokens.append(
                 static_next_tokens[i][:batch_size])
 
+        # print("next_tokens: ", next_tokens)
+        # print("all_token_tensors:", all_token_tensors)
         return torch.cat(next_tokens, dim=-1), all_token_tensors
 
     def maybe_load_weight(self, param, loaded_weight):
@@ -838,12 +846,18 @@ class MLPVariantSpeculator(nn.Module):
             if get_tensor_model_parallel_world_size() == 1:
 
                 logits, last_tokens = torch.topk(logits, topk, dim=-1)
+                # print(f"head {head_index}, topk {topk}, logits.shape: {logits.shape}, last_tokens.shape: {last_tokens.shape}")
                 if out is None:
+                    # print("out (original): None")
                     out = last_tokens.view(batch_size, -1, 1)
                 else:
+                    # print("out (original):", out.shape)
                     out = out.unsqueeze(2).expand(-1, -1, topk, -1)  # b k k' d
                     out = out.reshape(batch_size, -1, head_index)
                     out = torch.cat([out, last_tokens.view(batch_size, -1, 1)], dim=-1)
+                # print("out (final):", out.shape)
+                # print(out)
+                # print()
 
                 last_tokens = last_tokens.reshape(batch_size, -1)
 
@@ -872,7 +886,7 @@ class MLPVariantSpeculator(nn.Module):
         input_ids: torch.Tensor,
         previous_hidden_states: torch.Tensor,
         num_predict_tokens: int,
-    ) -> List[SamplerOutput]:
+    ) -> List[torch.Tensor]:
         if num_predict_tokens > self.max_speculative_tokens:
             raise ValueError(
                 f"Max speculative tokens for model is "
@@ -892,6 +906,11 @@ class MLPVariantSpeculator(nn.Module):
 
         static_next_tokens = [None] * num_predict_tokens
         all_token_tensors : List[torch.Tensor] = []
+
+        # print(f"MLPVariantSpeculator.generate_proposals ({self.method})")
+        # print("input_ids:", input_ids.shape)
+        # print("self.cuda_graph_mode:", self.cuda_graph_mode)
+        # print("num_predict_tokens:", num_predict_tokens)
 
         if self.method == "sum_lstm":
             previous_cell_states = torch.zeros(

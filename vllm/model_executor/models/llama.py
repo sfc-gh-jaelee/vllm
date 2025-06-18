@@ -526,6 +526,10 @@ class LlamaForCausalLM(nn.Module, SupportsLoRA, SupportsPP):
         intermediate_tensors: Optional[IntermediateTensors] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, IntermediateTensors]:
+        # if not torch.all(input_ids == 0):
+        #     print("input_ids: ", input_ids)
+        # if not torch.all(positions == 0):
+        #     print("positions: ", positions)
         model_output = self.model(input_ids, positions, intermediate_tensors,
                                   inputs_embeds)
         return model_output

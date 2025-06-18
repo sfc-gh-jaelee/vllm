@@ -720,6 +720,10 @@ class Scheduler:
             self._free_request(request)
 
     def _free_request(self, request: Request) -> None:
+        # print("prompt_token_ids:", request.prompt_token_ids)
+        # print("_output_token_ids", request._output_token_ids)
+        # print("num_tokens", request.num_tokens)
+        # print("num_output_tokens:", request.num_output_tokens)
         assert request.is_finished()
         self.kv_cache_manager.free(request)
         self.kv_cache_manager.free_block_hashes(request)

@@ -245,11 +245,18 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                                          device="cpu",
                                          pin_memory=self.pin_memory)
         self.input_ids_np = self.input_ids_cpu.numpy()
+        # print("self.max_num_tokens: ", self.max_num_tokens)
         self.positions_cpu = torch.zeros(self.max_num_tokens,
                                          dtype=torch.int64,
                                          device="cpu",
                                          pin_memory=self.pin_memory)
         self.positions_np = self.positions_cpu.numpy()
+        if self.use_spec_decode:
+            self.spec_positions_cpu = torch.zeros(self.max_num_tokens,
+                                                    dtype=torch.int64,
+                                                    device="cpu",
+                                                    pin_memory=self.pin_memory)
+            # self.spec_positions_np = self.spec_positions_cpu.numpy()
         self.slot_mapping_cpu = torch.zeros(self.max_num_tokens,
                                             dtype=torch.int32,
                                             device="cpu",
@@ -484,6 +491,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         # TODO: The Python loop can be slow. Optimize.
         num_scheduled_tokens = np.empty(num_reqs, dtype=np.int32)
         max_num_scheduled_tokens = 0
+        num_tokens_prev_requests=0
         for i, req_id in enumerate(self.input_batch.req_ids):
             num_tokens = scheduler_output.num_scheduled_tokens[req_id]
             num_scheduled_tokens[i] = num_tokens
@@ -492,6 +500,16 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             if req_id in scheduler_output.scheduled_spec_decode_trees:
                 self.seq_trees.append(
                     scheduler_output.scheduled_spec_decode_trees[req_id])
+                # print(f"construct_position_ids req_id={req_id}")
+                # print("num_tokens_prev_requests: ", num_tokens_prev_requests)
+                # print("self.input_batch.num_computed_tokens_cpu", self.input_batch.num_computed_tokens_cpu)
+                # print("self.input_batch.num_computed_tokens_cpu[req_id]", self.input_batch.num_computed_tokens_cpu[i])
+                self.seq_trees[-1].construct_position_ids(
+                    self.spec_positions_cpu[num_tokens_prev_requests:],
+                    self.input_batch.num_computed_tokens_cpu[i]
+                )
+            num_tokens_prev_requests += num_tokens
+                
 
         # Get request indices.
         # E.g., [2, 5, 3] -> [0, 0, 1, 1, 1, 1, 1, 2, 2, 2]
@@ -520,6 +538,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         # Only relevant for models using M-RoPE (e.g, Qwen2-VL)
         if self.uses_mrope:
             self._calc_mrope_positions(scheduler_output)
+
 
         # Get token indices.
         # E.g., [0, 1, 0, 1, 2, 3, 4, 0, 1, 2]
@@ -570,7 +589,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             self.mrope_positions[:, :total_num_scheduled_tokens].copy_(
                 self.mrope_positions_cpu[:, :total_num_scheduled_tokens],
                 non_blocking=True)
+        elif self.use_spec_decode and len(self.seq_trees) >= num_reqs :
+            # print("Setting self.positions from self.spec_positions_cpu")
+            self.positions[:total_num_scheduled_tokens].copy_(
+                self.spec_positions_cpu[:total_num_scheduled_tokens],
+                non_blocking=True)
         else:
+
+            # print("Setting self.positions normally")
+
             # Common case (1D positions)
             self.positions[:total_num_scheduled_tokens].copy_(
                 self.positions_cpu[:total_num_scheduled_tokens],
@@ -1113,8 +1140,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     last_accepted_idx.append(0)
                 else:
                     assert (batch_id < len(self.seq_trees))
+                    # print("output_token_ids:", output_token_ids)
+                    # print("scorer_token_ids_per_req:", scorer_token_ids_per_req)
+                    # print("self.seq_trees[batch_id]", self.seq_trees[batch_id])
                     accepted_tokens, accepted_idx = self.seq_trees[
                         batch_id].verify(scorer_token_ids_per_req)
+
+                    
                     batch_id += 1
                     #print0("accepted_tokens: ", accepted_tokens, "accepted_idx: ", accepted_idx)
                     output_token_ids.append(accepted_tokens)
@@ -1122,6 +1154,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     # Update last accepted index to make sure in the next round
                     # the mlp proposer gets the correct hidden states
                     last_accepted_idx.append(accepted_idx[-1])
+
+                    # print("accepted_tokens: ", accepted_tokens)
+                    # print("accepted_idx:", accepted_idx)
+                    # print("last_accepted_idx:", last_accepted_idx)
+                    # assert False
 
                     # Update the slot_mapping to make sure the kv cache is updated
                     # correctly to be used in the next iteration.
@@ -1220,28 +1257,22 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             seq_trees = []
             spec_token_ids: list[list[int]] = []
 
-            from vllm.v1.spec_decode.tree_decoding import SequenceTree
+            from vllm.v1.spec_decode.tree_decoding import SequenceTreeV2
 
-            for idx in range(len(candidates)):
-                st = SequenceTree()
+            batch_size, num_paths, path_length = candidates.shape
+
+            for idx in range(batch_size):
                 last_token = valid_sampled_token_ids[idx][-1]
-                #st.add_sequence([last_token] + spec_token_ids_ngram[idx])
-
-                # only mlp spec
-                # st.add_sequence([last_token] + spec_token_ids_mlp[idx])
-
-                # Tree token with mlp spec
-                for j in range(len(candidates[idx])):
-                    st.add_sequence([last_token] + candidates[idx][j])
-
-                flattened_seq = st.flat()
-
-                #print0("flatteend_seq: ", flattened_seq)
-                #print0("mask: ")
-                #print0(st.mask())
+                paths_with_root = [[last_token]+candidates[idx,path,:].cpu().tolist() for path in range(num_paths)]
+                st = SequenceTreeV2.from_paths(paths_with_root)
 
                 seq_trees.append(st)
-                spec_token_ids.append(flattened_seq[1:])
+                spec_token_ids.append(st.token_ids[1:])
+                # # print("\n\nidx=",idx)
+                # print("st:")
+                # print(st)
+                # print("spec_token_ids:")
+                # print(spec_token_ids)
             # -----------------------------------------------------------------
 
             # -----------------------------------------------------------------
