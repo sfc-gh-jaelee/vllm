@@ -250,6 +250,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                                          device="cpu",
                                          pin_memory=self.pin_memory)
         self.positions_np = self.positions_cpu.numpy()
+        self.spec_positions_cpu = torch.zeros(self.max_num_tokens,
+                                         dtype=torch.int64,
+                                         device="cpu",
+                                         pin_memory=self.pin_memory)
         self.slot_mapping_cpu = torch.zeros(self.max_num_tokens,
                                             dtype=torch.int32,
                                             device="cpu",
@@ -484,6 +488,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         # TODO: The Python loop can be slow. Optimize.
         num_scheduled_tokens = np.empty(num_reqs, dtype=np.int32)
         max_num_scheduled_tokens = 0
+        tokens_prev_requests=0
         for i, req_id in enumerate(self.input_batch.req_ids):
             num_tokens = scheduler_output.num_scheduled_tokens[req_id]
             num_scheduled_tokens[i] = num_tokens
@@ -492,6 +497,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             if req_id in scheduler_output.scheduled_spec_decode_trees:
                 self.seq_trees.append(
                     scheduler_output.scheduled_spec_decode_trees[req_id])
+                self.spec_positions_cpu[tokens_prev_requests : tokens_prev_requests+num_tokens] = torch.tensor(
+                    scheduler_output.scheduled_spec_decode_trees[req_id].depths, dtype=self.spec_positions_cpu.dtype
+                ) + self.input_batch.num_computed_tokens_cpu[i]
+                tokens_prev_requests += num_tokens
 
         # Get request indices.
         # E.g., [2, 5, 3] -> [0, 0, 1, 1, 1, 1, 1, 2, 2, 2]
@@ -570,11 +579,17 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             self.mrope_positions[:, :total_num_scheduled_tokens].copy_(
                 self.mrope_positions_cpu[:, :total_num_scheduled_tokens],
                 non_blocking=True)
+        elif self.use_spec_decode and len(self.seq_trees) > 0:
+            self.positions[:total_num_scheduled_tokens].copy_(
+                self.spec_positions_cpu[:total_num_scheduled_tokens],
+                non_blocking=True)
+            # print("setting self.positions to (spec):", self.spec_positions_cpu[:total_num_scheduled_tokens])
         else:
             # Common case (1D positions)
             self.positions[:total_num_scheduled_tokens].copy_(
                 self.positions_cpu[:total_num_scheduled_tokens],
                 non_blocking=True)
+            # print("setting self.positions to (normal):", self.positions_cpu[:total_num_scheduled_tokens])
 
         # Prepare for cascade attention if needed.
         common_prefix_len = self._compute_cascade_attn_prefix_len(

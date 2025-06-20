@@ -77,10 +77,13 @@ class SequenceTree:
         self._flattened_sequence = []
         queue = deque()
         current_index = 0
+        self.depths = []
 
         for number in self.root.keys():
             node_data = self.root[number]
             queue.append((number, node_data))
+            self.depths.append(0)
+            node_data["depth"] =0
 
         while queue:
             number, node_data = queue.popleft()
@@ -89,9 +92,12 @@ class SequenceTree:
             current_index += 1
 
             children_dict = node_data['children']
+            depth = node_data["depth"]
             for child_number in children_dict.keys():
                 child_node_data = children_dict[child_number]
-                queue.append((child_number, child_node_data))
+                queue.append((child_number, child_node_data))                
+                self.depths.append(depth+1)
+                child_node_data["depth"] = depth+1
 
         self._tree_mask = self.__create_tree_mask()
         return self._flattened_sequence
