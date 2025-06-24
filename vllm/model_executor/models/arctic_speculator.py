@@ -814,6 +814,7 @@ class MLPVariantSpeculator(nn.Module):
             n_candidates = 8,
     ) -> torch.Tensor:
         out = None
+        log_probs = None
         topks = [int(s) for s in os.environ["topks"].split(",")]
         for head_index in range(num_predict_tokens):
             if self.method == "sum_lstm":
@@ -837,13 +838,22 @@ class MLPVariantSpeculator(nn.Module):
 
             if get_tensor_model_parallel_world_size() == 1:
                 _, last_tokens = torch.topk(logits, topk, dim=-1)
+                probs = F.log_softmax(logits, dim=-1)
+                probs, _ = torch.topk(probs, topk, dim=-1)
+
             else:
                 vals, indices = torch.topk(logits, topk, dim=-1)
                 indices = indices + get_tensor_model_parallel_rank() * logits.shape[-1]
                 vals = tensor_model_parallel_all_gather(vals)
                 indices = tensor_model_parallel_all_gather(indices)
-                more_indices = torch.topk(vals, topk, dim=-1, sorted=True).indices
+                max_val_cand, more_indices = torch.topk(vals, topk, dim=-1, sorted=True)
                 last_tokens = torch.gather(indices, -1, more_indices)
+                max_val = torch.max(max_val_cand, dim=-1, keepdim=True)[0]
+
+                numerator = torch.exp(logits - max_val)
+                local_sum_exp = torch.sum(numerator, dim=-1, keepdim=True)
+                global_sum_exp  = torch.sum(tensor_model_parallel_all_gather(local_sum_exp), dim=-1, keepdim=True)
+                probs = max_val_cand - max_val - torch.log(global_sum_exp)
 
             if out is None:
                 out = last_tokens.view(batch_size, -1, 1)
@@ -859,6 +869,28 @@ class MLPVariantSpeculator(nn.Module):
             if self.method == 'sum_lstm':
                 cell_states = cell_states.unsqueeze(2).expand(-1, -1, topk, -1)  # b k k' d
                 cell_states = cell_states.reshape(batch_size, -1, cell_states.size(3))  # b kk' d
+
+            if log_probs is None:
+                log_probs = probs.view(batch_size, -1)
+            else:
+                log_probs = log_probs.unsqueeze(2).expand(-1, -1, topk)  # b k k' d
+                log_probs = log_probs.add(probs)
+                log_probs = log_probs.reshape(batch_size, -1)
+
+            max_candidates_to_verifier = int(os.environ.get("max_candidates_to_verifier", 999999999))
+            max_candidates = int(os.environ.get("max_candidates", 9999999999))
+            max_candidates = max_candidates if head_index < self.n_predict - 1 else max_candidates_to_verifier
+            if previous_hidden_states.size(1) > max_candidates:
+                assert batch_size == 1
+                log_probs = log_probs.view(previous_hidden_states.size(1))
+                log_probs, best_guesses = log_probs.topk(max_candidates, dim=0)  # b k
+                log_probs = log_probs.unsqueeze(0)
+
+                out = out[:, best_guesses]
+                previous_hidden_states = previous_hidden_states[:, best_guesses]
+                last_tokens = last_tokens[:, best_guesses]
+                if self.method == "sum_lstm":
+                    cell_states = cell_states[:, best_guesses]
 
         all_token_tensors.append(out)
 
