@@ -31,7 +31,7 @@ class MLPProposer:
         more_tokens = self.model.generate_proposals(
             input_ids=input_ids,
             previous_hidden_states=previous_hidden_states,
-            num_predict_tokens=3,
+            num_predict_tokens=self.model.n_predict,
         )
 
 
