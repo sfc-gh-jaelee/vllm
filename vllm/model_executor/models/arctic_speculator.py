@@ -644,12 +644,17 @@ class MLPVariantSpeculator(nn.Module):
 
         self.cuda_graph_max_batch_size = 0
         self.cuda_graph_mode = False
+        self.topks = [int(s) for s in os.environ["topks"].split(",")]
         if not vllm_config.model_config.enforce_eager:
-            self.cuda_graph_mode = False
+            self.cuda_graph_mode = True
             self.cuda_graphs = {}
             self.cuda_graph_max_batch_size = padding_size(
                 vllm_config.scheduler_config.max_num_seqs
             )
+            total_topks = 1
+            for i, topk in enumerate(self.topks, start=1):
+                total_topks *= topk
+            static_all_tokens = torch.empty(self.cuda_graph_max_batch_size, total_topks, len(self.topks), dtype=torch.long)
             self.static_cuda_buffers = {
                 "last_tokens": torch.empty(
                     self.cuda_graph_max_batch_size, 1, dtype=torch.long
@@ -664,6 +669,7 @@ class MLPVariantSpeculator(nn.Module):
                     torch.empty(self.cuda_graph_max_batch_size, 1, dtype=torch.long)
                     for _ in range(self.n_predict)
                 ],
+                "all_tokens": [static_all_tokens]
             }
             if self.inner_dim[-1] != self.input_hidden_dim:
                 print("CREATED NEXT PREVIOUS HIDDEN STATES")
@@ -814,7 +820,7 @@ class MLPVariantSpeculator(nn.Module):
             n_candidates = 8,
     ) -> torch.Tensor:
         out = None
-        topks = [int(s) for s in os.environ["topks"].split(",")]
+        topks = self.topks
         for head_index in range(num_predict_tokens):
             if self.method == "sum_lstm":
                 states, cell_states = self.generate_states(
@@ -860,7 +866,10 @@ class MLPVariantSpeculator(nn.Module):
                 cell_states = cell_states.unsqueeze(2).expand(-1, -1, topk, -1)  # b k k' d
                 cell_states = cell_states.reshape(batch_size, -1, cell_states.size(3))  # b kk' d
 
-        all_token_tensors.append(out)
+        if all_token_tensors is None:
+            all_token_tensors[0] = out
+        else:
+            all_token_tensors[0].copy_(out)
 
     def generate_proposals(
         self,
@@ -886,7 +895,7 @@ class MLPVariantSpeculator(nn.Module):
         state_shapes[-1] = self.inner_dim[-1]
 
         static_next_tokens = [None] * num_predict_tokens
-        all_token_tensors : List[torch.Tensor] = []
+        static_all_tokens = [None]
 
         if self.method == "sum_lstm":
             previous_cell_states = torch.zeros(
@@ -931,6 +940,10 @@ class MLPVariantSpeculator(nn.Module):
                 static_next_tokens[i] = self.static_cuda_buffers["next_tokens"][i][
                     :padded_size
                 ]
+            static_all_tokens[0] = self.static_cuda_buffers["all_tokens"][0][
+                                    :padded_size
+                                    ]
+
 
             if g is None:
                 from vllm.distributed.parallel_state import graph_capture
@@ -940,21 +953,23 @@ class MLPVariantSpeculator(nn.Module):
                     g = torch.cuda.CUDAGraph()
                     with torch.cuda.graph(g, stream=capture_context.stream):
                         if self.method == "sum_lstm":
-                            self.generate_token_ids(
+                            self.generate_multiple_token_ids(
                                 padded_size,
                                 num_predict_tokens,
                                 static_last_tokens,
                                 static_hidden_states,
                                 static_next_tokens,
+                                static_all_tokens,
                                 cell_states=static_cell_states,
                             )
                         else:
-                            self.generate_token_ids(
+                            self.generate_multiple_token_ids(
                                 padded_size,
                                 num_predict_tokens,
                                 static_last_tokens,
                                 static_hidden_states,
                                 static_next_tokens,
+                                static_all_tokens,
                             )
                 self.cuda_graphs[cg_key] = g
             else:
@@ -967,7 +982,7 @@ class MLPVariantSpeculator(nn.Module):
                     last_tokens,
                     previous_hidden_states,
                     static_next_tokens,
-                    all_token_tensors,
+                    static_all_tokens,
                     cell_states=previous_cell_states,
                 )
             else:
@@ -977,10 +992,10 @@ class MLPVariantSpeculator(nn.Module):
                     last_tokens,
                     previous_hidden_states,
                     static_next_tokens,
-                    all_token_tensors,
+                    static_all_tokens,
                 )
 
-        return all_token_tensors
+        return static_all_tokens
 
     def maybe_load_weight(self, param, loaded_weight):
         if param is not None:
