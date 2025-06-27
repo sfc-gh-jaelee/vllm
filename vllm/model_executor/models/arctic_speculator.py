@@ -654,6 +654,8 @@ class MLPVariantSpeculator(nn.Module):
             total_topks = 1
             for i, topk in enumerate(self.topks, start=1):
                 total_topks *= topk
+            max_candidates_to_verifier = int(os.environ.get("max_candidates_to_verifier", 999999999))
+            total_topks = min(max_candidates_to_verifier, total_topks)
             static_all_tokens = torch.empty(self.cuda_graph_max_batch_size, total_topks, len(self.topks), dtype=torch.long)
             self.static_cuda_buffers = {
                 "last_tokens": torch.empty(
