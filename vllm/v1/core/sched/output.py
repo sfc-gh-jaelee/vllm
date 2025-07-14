@@ -127,6 +127,8 @@ class SchedulerOutput:
     # If a request does not have any spec decode tokens, it will not be
     # included in the dictionary.
     scheduled_spec_decode_tokens: dict[str, list[int]]
+    from vllm.v1.spec_decode.tree_decoding import SequenceTree
+    scheduled_spec_decode_trees: dict[str, SequenceTree]
     # req_id -> encoder input indices that need processing.
     # E.g., if a request has [0, 1], it could mean the vision encoder needs
     # to process that the request's 0-th and 1-th images in the current step.

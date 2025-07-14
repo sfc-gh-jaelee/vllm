@@ -1336,11 +1336,11 @@ class EngineArgs:
                 speculative_model = self.speculative_config.get("model")
                 if speculative_model in ("ngram", "[ngram]"):
                     is_ngram_enabled = True
-            if not (is_ngram_enabled or is_eagle_enabled or is_medusa_enabled):
-                # Other speculative decoding methods are not supported yet.
-                _raise_or_fallback(feature_name="Speculative Decoding",
-                                   recommend_to_remove=False)
-                return False
+            # if not (is_ngram_enabled or is_eagle_enabled or is_medusa_enabled):
+            #     # Other speculative decoding methods are not supported yet.
+            #     _raise_or_fallback(feature_name="Speculative Decoding",
+            #                        recommend_to_remove=False)
+            #     return False
 
         # No XFormers so far.
         V1_BACKENDS = [

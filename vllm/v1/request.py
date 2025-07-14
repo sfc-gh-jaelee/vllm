@@ -51,6 +51,9 @@ class Request:
         self._output_token_ids: list[int] = []
         self._all_token_ids: list[int] = self.prompt_token_ids.copy()
         self.spec_token_ids: list[int] = []
+        from vllm.v1.spec_decode.tree_decoding import SequenceTree
+        self.spec_tree: Optional[SequenceTree] = None
+
         self.num_computed_tokens = 0
         self.cache_salt: Optional[str] = cache_salt
 

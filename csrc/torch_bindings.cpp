@@ -617,6 +617,13 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _cache_ops), cache_ops) {
       "Tensor block_mapping) -> ()");
   cache_ops.impl("copy_blocks", torch::kCUDA, &copy_blocks);
 
+  // Copy the cache slots from src to dst.
+  cache_ops.def(
+      "copy_slots(Tensor(a!)[] kv_caches, "
+      "Tensor block_mapping) -> ()");
+  cache_ops.impl("copy_slots", torch::kCUDA, &copy_slots);
+
+
   cache_ops.def(
       "copy_blocks_mla(Tensor(a!)[] kv_caches, Tensor block_mapping) -> ()");
   cache_ops.impl("copy_blocks_mla", torch::kCUDA, &copy_blocks_mla);

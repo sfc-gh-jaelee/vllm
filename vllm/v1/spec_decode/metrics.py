@@ -51,6 +51,9 @@ class SpecDecodingLogging:
 
     def __init__(self):
         self.reset()
+        self.total_num_draft_tokens: int = 0
+        self.total_num_accepted_tokens: int = 0
+        self.count: int = 0
 
     def reset(self):
         self.num_drafts: list[int] = []
@@ -65,6 +68,7 @@ class SpecDecodingLogging:
             spec_decoding_stats.num_accepted_tokens)
         self.accepted_tokens_per_pos_lists.append(
             spec_decoding_stats.num_accepted_tokens_per_pos)
+        self.count += 1
 
     def log(self, log_fn=logger.info):
         if not self.num_drafts:
@@ -72,6 +76,9 @@ class SpecDecodingLogging:
         num_drafts = np.sum(self.num_drafts)
         num_draft_tokens = np.sum(self.num_draft_tokens)
         num_accepted_tokens = np.sum(self.num_accepted_tokens)
+
+        self.total_num_accepted_tokens += num_accepted_tokens
+        self.total_num_draft_tokens += num_draft_tokens
 
         draft_acceptance_rate = (num_accepted_tokens / num_draft_tokens *
                                  100 if num_draft_tokens > 0 else float("nan"))
@@ -83,18 +90,32 @@ class SpecDecodingLogging:
         acceptance_rates = np.sum(pos_matrix, axis=0) / num_drafts
         rates_str = ", ".join(f"{p:.3f}" for p in acceptance_rates)
 
+        total_draft_acceptance_rate = (
+            self.total_num_accepted_tokens / self.total_num_draft_tokens * 100
+            if self.total_num_draft_tokens > 0
+            else float("nan")
+        )
+
         log_fn(
             "SpecDecoding metrics: "
             "Draft acceptance rate: %.1f%%, "
             "Mean acceptance length: %.2f, "
             "Accepted: %d tokens, "
             "Drafted: %d tokens, "
-            "Per-position acceptance rate: %s",
+            "Per-position acceptance rate: %s,  "
+            "Total draft acceptance rate: %.1f%%, "
+            "Total accepted: %d tokens, "
+            "Total drafted: %d tokens, "
+            "Average accpetace length: %.4f",
             draft_acceptance_rate,
             mean_acceptance_length,
             num_accepted_tokens,
             num_draft_tokens,
             rates_str,
+            total_draft_acceptance_rate,
+            self.total_num_accepted_tokens,
+            self.total_num_draft_tokens,
+            self.total_num_accepted_tokens / self.count
         )
         self.reset()
 

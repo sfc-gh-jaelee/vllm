@@ -181,6 +181,8 @@ class Scheduler(SchedulerInterface):
         encoder_budget = self.max_num_encoder_input_tokens
         # Spec decode-related.
         scheduled_spec_decode_tokens: dict[str, list[int]] = {}
+        from vllm.v1.spec_decode.tree_decoding import SequenceTree
+        scheduled_spec_decode_trees: dict[str, SequenceTree] = {}
 
         # For logging.
         scheduled_timestamp = time.monotonic()
@@ -286,6 +288,8 @@ class Scheduler(SchedulerInterface):
                     del request.spec_token_ids[num_scheduled_spec_tokens:]
                     scheduled_spec_decode_tokens[request.request_id] = (
                         request.spec_token_ids)
+                    scheduled_spec_decode_trees[request.request_id] = (
+                        request.spec_tree)
 
             # Encoder-related.
             if encoder_inputs_to_schedule:
@@ -535,6 +539,7 @@ class Scheduler(SchedulerInterface):
             num_scheduled_tokens=num_scheduled_tokens,
             total_num_scheduled_tokens=total_num_scheduled_tokens,
             scheduled_spec_decode_tokens=scheduled_spec_decode_tokens,
+            scheduled_spec_decode_trees=scheduled_spec_decode_trees,
             scheduled_encoder_inputs=scheduled_encoder_inputs,
             num_common_prefix_blocks=num_common_prefix_blocks,
             # finished_req_ids is an existing state in the scheduler,
@@ -696,6 +701,7 @@ class Scheduler(SchedulerInterface):
     ) -> EngineCoreOutputs:
         sampled_token_ids = model_runner_output.sampled_token_ids
         spec_token_ids = model_runner_output.spec_token_ids
+        spec_trees = model_runner_output.spec_trees
         logprobs = model_runner_output.logprobs
         prompt_logprobs_dict = model_runner_output.prompt_logprobs_dict
         num_scheduled_tokens = scheduler_output.num_scheduled_tokens
@@ -791,6 +797,7 @@ class Scheduler(SchedulerInterface):
                         spec_token_ids[req_index])
                 else:
                     request.spec_token_ids = spec_token_ids[req_index]
+                    request.spec_tree = spec_trees[req_index]
 
             # Get prompt logprobs for this request.
             prompt_logprobs_tensors = prompt_logprobs_dict.get(req_id)

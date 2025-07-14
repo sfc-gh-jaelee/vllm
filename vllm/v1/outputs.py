@@ -88,6 +88,8 @@ class ModelRunnerOutput:
 
     # num_reqs x num_spec_tokens
     spec_token_ids: Optional[list[list[int]]]
+    from vllm.v1.spec_decode.tree_decoding import SequenceTree
+    spec_trees: Optional[list[SequenceTree]]
 
     # [num_reqs, max_num_logprobs + 1]
     # [num_reqs, max_num_logprobs + 1]
@@ -109,6 +111,7 @@ EMPTY_MODEL_RUNNER_OUTPUT = ModelRunnerOutput(req_ids=[],
                                               req_id_to_index={},
                                               sampled_token_ids=[],
                                               spec_token_ids=None,
+                                              spec_trees=None,
                                               logprobs=None,
                                               prompt_logprobs_dict={},
                                               finished_sending=None,

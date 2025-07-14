@@ -2485,9 +2485,8 @@ class SpeculativeConfig:
             self.draft_model_config = self.target_model_config
             self.draft_parallel_config = self.target_parallel_config
         else:
-            self.prompt_lookup_max = 0
-            self.prompt_lookup_min = 0
-
+            # self.prompt_lookup_max = 0
+            # self.prompt_lookup_min = 0
             if self.model is not None:
                 self.draft_model_config = ModelConfig(
                     model=self.model,
